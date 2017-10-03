@@ -1,0 +1,410 @@
+---
+title: "Portfolio Analysis"
+author: "Miguel A. Arranz, Ph.D"
+output:
+  html_document: default
+  html_notebook: default
+---
+
+Packages
+```{r libraries, echo=FALSE, warning=F, message=FALSE, error=F}
+library(tidyverse)
+library(tidyquant)
+library(timetk)
+#library(tibbletime)
+library(highcharter)
+```
+
+
+# Importing data and Creting Returns
+
+We start by downloading the data. 
+
+Our portfolio consists of
+
+1.  SPY (S&P500 fund) weighted 25%
+1.  EFA (a non-US equities fund) weighted 25%
+1.  IJS (a small-cap value fund) weighted 20%
+1.  EEM (an emerging-mkts fund) weighted 20%
+1.  AGG (a bond fund) weighted 10%
+
+```{r download, warning=F, message=FALSE, error=F}
+# The symbols vector holds our tickers. 
+symbols <- c("SPY","EFA", "IJS", "EEM","AGG")
+
+# The prices object will hold our raw price data throughout this book.
+prices <- 
+  getSymbols(symbols, src = 'yahoo', from = "2005-01-01", 
+             auto.assign = TRUE, warnings = FALSE) %>% 
+  map(~Ad(get(.))) %>% 
+  reduce(merge) %>%
+  `colnames<-`(symbols)
+
+```
+
+We now have an xts object of the adjusted prices for our 5 assets. Have a quick peek
+```{r}
+head(prices)
+```
+
+
+Our first reading is from January 3, 2005 (the first trading day of that year) and we have daily prices. Let's stay in thextsworld and convert to monthly prices using a call to to.monthly(prices, indexAt = "last", OHLC = FALSE) from quantmod. The argument index = "last" tells the function whether we want to index to the first day of the month or the last day.
+```{r tomonthly}
+prices_monthly <- to.monthly(prices, indexAt = "last", OHLC = FALSE)
+head(prices_monthly)
+```
+
+Now we'll call Return.calculate(prices_monthly, method = "log") to convert to returns and save as an object called assed_returns_xts. Note this will give us log returns by the method = "log" argument. We could have used method = "discrete" to get simple returns.
+
+```{r monthreturns}
+asset_returns_xts <- na.omit(Return.calculate(prices_monthly, method = "log"))
+head(asset_returns_xts)
+```
+
+First, let's use highcharter to visualize the xts formatted returns. Highcharter is fantastic for visualizing a time series or many time series. First, we set highchart(type = "stock") to get a nice time series line. Then we add each of our series to the highcharter code flow. In this case, we'll add our columns from the xts object.
+
+```{r hchart1}
+highchart(type = "stock") %>% 
+  hc_title(text = "Monthly Log Returns") %>%
+  hc_add_series(asset_returns_xts$SPY, 
+                  name = names(asset_returns_xts$SPY)) %>%
+  hc_add_series(asset_returns_xts$EFA, 
+                  name = names(asset_returns_xts$EFA)) %>%
+  hc_add_series(asset_returns_xts$IJS, 
+                  name = names(asset_returns_xts$IJS)) %>%
+  hc_add_theme(hc_theme_flat()) %>%
+  hc_navigator(enabled = FALSE) %>% 
+  hc_scrollbar(enabled = FALSE)
+```
+
+
+
+# Portfolio Creation
+
+Now, on to constructing a portfolio and calculating volatility. To turn these five ETFs into a portfolio, we need to assign them weights. Let's first create a weights vector.
+
+```{r weights}
+weights <- c(0.10, 0.10, 0.20, 0.40, 0.20)
+```
+Before we use the weights in our calculations, we perform a quick sanity check in the next code chunk. This might not be necessary with five assets as we have today, but it is good practice because if we had 50 assets, it could save us a lot of grief to catch a mistake early.
+
+```{r sanitycheck}
+# Make sure the weights line up with assets.
+asset_weights_sanity_check <- tibble(weights, symbols)
+
+asset_weights_sanity_check
+```
+
+
+
+1.  First, we assign the weights of each asset.
+1.  Then, we isolate and assign returns of each asset.
+1.  Next, we plug those weights and returns into the equation for portfolio standard deviation, which involves the following:
+1.  Take the weight squared of each asset times its variance, and sum those weighted variance terms.
+1.  Then we take the covariance of each asset pair, multiplied by two times the weight of the first asset times the weight of the second asset.
+1.  Sum together the covariance terms and the weighted variance terms. This gives us the portfolio variance.
+Then take the square root to get the standard deviation.
+
+```{r aweights}
+# Let's assign each asset a weight from our weights vector above.
+
+w_asset1 <- weights[1]
+w_asset2 <- weights[2]
+w_asset3 <- weights[3]
+w_asset4 <- weights[4]
+w_asset5 <- weights[5]
+
+# And each asset has a return as well, stored in our 
+# portfolio_component_monthly_returns_xts object.
+portfolio_component_monthly_returns_xts <- asset_returns_xts
+asset1 <- portfolio_component_monthly_returns_xts[,1]
+asset2 <- portfolio_component_monthly_returns_xts[,2]
+asset3 <- portfolio_component_monthly_returns_xts[,3]
+asset4 <- portfolio_component_monthly_returns_xts[,4]
+asset5 <- portfolio_component_monthly_returns_xts[,5]
+
+```
+
+Now, let's turn to the less verbose matrix algebra path and confirm that we get the same result.
+
+First, we will build a covariance matrix of returns using the cov() function.
+
+```{r matrixcov}
+# Build the covariance matrix. 
+covariance_matrix <- cov(portfolio_component_monthly_returns_xts)
+covariance_matrix
+```
+
+Back to our calculation: let's take the square root of the transpose of the weights vector times the covariance matrix times the weights vector. To perform matrix multiplication, we use %*%.
+
+```{r sdmatrixalgebra}
+# If we wrote out the matrix multiplication, we would get the original by-hand equation. 
+sd_matrix_algebra <- sqrt(t(weights) %*% covariance_matrix %*% weights)
+
+# I want to print out the percentage, so I'll multiply by 100 and round.
+sd_matrix_algebra_percent <- round(sd_matrix_algebra * 100, 2)
+print(sd_matrix_algebra_percent)
+```
+
+Finally, we can use the built-in StdDev() function from the performanceAnalytics package. It takes two arguments: returns and weights.
+
+```{r portfoliosd}
+# Confirm portfolio volatility
+portfolio_sd <- StdDev(portfolio_component_monthly_returns_xts, weights = weights)
+
+# I want to print out the percentage, so I'll multiply by 100 and round.
+portfolio_sd_percent <- round(portfolio_sd * 100, 2)
+print(portfolio_sd_percent)
+```
+
+
+Now, let's turn to a little bit of portfolio theory (or, why we want to build a portfolio instead of putting all of our money into SPY). We believe that by building a portfolio of assets whose covariances of returns are lower than the variance of SPY returns (or, equivalently, lower than the covariance of SPY returns with themselves), we can construct a portfolio whose standard deviation is lower than the standard deviation of SPY. If we believe that standard deviation and volatility are a good proxy for risk, then the portfolio would have a lower risk.
+
+To see if we succeeded, first, isolate the returns of SPY, then find the standard deviation of those returns.
+
+```{r spyreturns}
+# First get the returns of the S&P 500 isolated
+spy_returns <- portfolio_component_monthly_returns_xts$SPY
+
+# Now calculated standard deviation
+spy_sd <- StdDev(spy_returns)
+
+# To confirm the variance of SPY's returns is equal to 
+# the covariance of SPY's returns with themselves, 
+# uncomment and run the next two lines of code.
+# spy_var <- var(spy_returns)
+# spy_cov <- cov(spy_returns, spy_returns)
+
+# We could also have extracted this value from the SPY column and SPY row of covariance matrix,
+# since the covariance of SPY with itself is equal to its variance. 
+# spy_sd_from_cov_matrix <- sqrt(covariance_matrix[4,4])
+
+# Again, I want percent so will multiply by 100 and round.
+spy_sd_percent <- round(spy_sd * 100, 2)
+print(spy_sd_percent)
+```
+
+# Rolling Volatility
+
+First though, why do we care about rolling standard deviations when in our previous Notebook we calculated 'the' standard deviation of monthly returns for both SPY and the portfolio? In that Notebook, what we calculated was the standard deviation of monthly returns for our entire sample, which was monthly returns for four-year period 2013-2017. What we might miss, for example, is a 3-month or 6-month period where the volatility spiked or plummeted or did both. And the longer our sample size, the more likely we are to miss something important. If we had 10 or 20 years of data and we calculated the standard deviation for the entire sample, we could fail to notice an entire year in which volatility was very high. Hence, we would fail to ponder the probability that it could occur again.
+
+Imagine a portfolio which had a standard deviation of returns for each 6-month period of 3% and it never changed. Now, imagine a portfolio whose vol fluctuated every few 6-month periods from 0% to 6% . We might find a 3% standard deviation of monthly returns over a 10-year sample for both of these, but those two portfolios are not exhibiting the same volatility. The rolling volatility of each would show us the differences and then we could hypothesize about the past causes and future probabilities for those differences. We might also want to think about dynamically re-balancing our portfolio to better manage volatility if we are seeing large spikes in the rolling windows. We'll look more into re balancing as this series progresses.
+
+Our least difficult task is calculating the rolling standard deviation of SPY returns. We use zoo::rollapply for this and just need to choose a number of months for the rolling window.
+
+```{r rollapply}
+window <- 6
+
+spy_rolling_sd <- na.omit(rollapply(spy_returns$SPY, window, 
+                           function(x) StdDev(x)))
+```
+
+
+
+We now have an xts object called spy_rolling_sd that contains the 6-month rolling standard deviation of returns of SPY. Keep in mind that the chosen window is important and can affect the results quite a bit. Soon we'll wrap this work to a Shiny app where changing the window and visualizing the results will be easier.
+
+Next, we calculate the rolling volatility of our weighted portfolio. The rollapply function doesn't play nicely with the weights argument that we need to supply to StdDev(). We will craft our own version of roll apply to make this portfolio calculation, which we will use in conjunction with the map_df() function from purrr.
+
+Before we do that, a slight detour from our substance. Below are two piped workflows to quickly convert from xts to dataframe and back to xts. These rely heavily on the as_tibble() and as_xts() functions from the tidyquant.
+
+We're halfway there. We need to apply that function starting at the first date in our portfolio_component_monthly_returns_df object, and keep applying it to successive date indexes until the date that is 6 months before the final date. Why end there? Because there is no rolling 6-month standard deviation that starts only 1, 2, 3, 4 or 5 months ago!
+
+We will invoke map_df() to apply our function to date 1, then save the result to a data.frame, then apply our function to date 2, and save to that same data.frame, and so on until we tell it stop at the index that is 6 before the last date index.
+
+```{r detour, eval=FALSE}
+# toggle from an xts object to a tibble
+portfolio_component_monthly_returns_df <- 
+  portfolio_component_monthly_returns_xts %>% 
+  tk_tbl(preserve_row_names = TRUE) %>% 
+  mutate(date = ymd(row.names)) %>% 
+  select(-row.names) %>% 
+  select(date, everything())
+
+# toggle from a tibble back to xts.
+returns_xts <- portfolio_component_monthly_returns_df %>% 
+  as_xts(date_col = date)
+```
+Why did we take that detour? Because we will use map_df(), mutate() and select() when we apply our custom function with the %>% operator and that will require a tibble/data.frame.
+
+Before we step through the code of the custom function, let's write out the goal and logic.
+
+Our goal is to create a function that takes a data.frame of asset returns and calculates the rolling standard deviation based on a starting date index and a window, for a portfolio with specified weights for each asset. We will need to supply four arguments to the function, accordingly.
+
+Here's the logic I used to construct that function (feel free to eviscerate this logic and replace it with something better).
+
+1.  Assign a start date and end date based on the window argument. If we set window = 6, we'll be calculating 6-month rolling standard deviations.
+1.  Use filter() to subset the original data.frame down to one window. I label the subsetted data frame as interval_to_use. In our example, that interval is a 6-month window of our original data frame.
+1.  Now we want to pass that interval_to_use object to StdDev(), but it's not an xts object. We need to convert it and label it returns_xts.
+1.  Before we call StdDev(), we need weights. Create a weights object called w and give the value from the argument we supplied to the function.
+1.  Pass the returns_xts and w to StdDev().
+We now have an object called results_as_xts. What is this? It's the standard deviation of returns of the first 6-month window of our weighted portfolio.
+1.  Convert it back to a tibble and return.
+We now have the standard deviation of returns for the 6-month period that started on the first date, because we default to start = 1. If we wanted to get the standard deviation for a 6-month period that started on the second date, we could set start = 2, etc.
+
+```{r rollportfsd}
+rolling_portfolio_sd <- function(returns_df, start = 1, window = 6, weights){
+ 
+  start_date <- returns_df$date[start]
+  
+  end_date <-  returns_df$date[c(start + window)]
+  
+  interval_to_use <- returns_df %>% filter(date >= start_date & date < end_date)
+  
+  returns_xts <- interval_to_use %>% as_xts(date_col = date) 
+  
+  w <- weights
+  
+  results_as_xts <- StdDev(returns_xts, weights = w, portfolio_method = "single")
+  
+  results_to_tibble <- as_tibble(t(results_as_xts[,1])) %>% 
+    mutate(date = ymd(end_date)) %>% 
+    select(date, everything()) 
+  
+}
+```
+
+We're halfway there. We need to apply that function starting at the first date in our portfolio_component_monthly_returns_df object, and keep applying it to successive date indexes until the date that is 6 months before the final date. Why end there? Because there is no rolling 6-month standard deviation that starts only 1, 2, 3, 4 or 5 months ago!
+
+We will invoke map_df() to apply our function to date 1, then save the result to a data.frame, then apply our function to date 2, and save to that same data.frame, and so on until we tell it stop at the index that is 6 before the last date index.
+
+```{r roportsdresult, eval=FALSE}
+window <- 6
+
+roll_portfolio_result <-
+  map_df(1:(nrow(portfolio_component_monthly_returns_df) - window), rolling_portfolio_sd, 
+         returns_df = portfolio_component_monthly_returns_df, window = window, weights = weights) %>%
+  mutate(date = ymd(date)) %>% 
+  select(date, everything()) %>%
+  as_xts(date_col = date) %>% 
+  `colnames<-`("Rolling Port SD")
+
+head(roll_portfolio_result)
+```
+
+# Asset Contribution to Portfolio Volatility
+
+Let's start to look at the individual components.
+
+The percentage contribution of asset i is defined as:
+
+(marginal contribution of asset i * weight of asset i) / portfolio standard deviation
+
+To find the marginal contribution of each asset, take the cross-product of the weights vector and the covariance matrix divided by the portfolio standard deviation.
+
+```{r cprod}
+w <- weights
+sd_portfolio <- portfolio_sd
+# Marginal contribution of each asset. 
+marginal_contribution <- w %*% covariance_matrix / sd_portfolio[1, 1]
+```
+
+Now multiply the marginal contribution of each asset by the weights vector to get total contribution. We can then sum the asset contributions and make sure it's equal to the total portfolio standard deviation.
+
+```{r con2}
+# Component contributions to risk are the weighted marginal contributions
+component_contribution <- marginal_contribution * w 
+
+# This should equal total portfolio vol, or the object `sd_portfolio`
+components_summed <- rowSums(component_contribution)
+```
+
+
+The StdDev function from PerformanceAnalytics will run this same calculation if we pass in the weights and set portfolio_method = "component" (recall that if we set portfolio_method = "single", the function will return the total portfolio standard deviation, as we saw in our previous work).
+
+Let's confirm that the pre-built function returns the same results.
+
+```{r confirm}
+# Confirm component contribution to volality.
+portfolioComponentReturns <- portfolio_component_monthly_returns_xts
+component_sd_pre_built <- StdDev(portfolioComponentReturns, weights = w, 
+                              portfolio_method = "component")
+component_sd_pre_built
+
+```
+
+That function returns a list, and one of the elements is $pct_contrib_StdDev, which is the percentage contribution of each asset. Let's move it to a tibble for ease of presentation.
+
+```{r tibbleport}
+# Port to a tibble.  
+percentages_tibble_pre_built <- 
+  component_sd_pre_built$pct_contrib_StdDev %>%
+  tk_tbl(preserve_row_names = FALSE) %>%
+  mutate(asset = symbols) %>%
+  rename('risk contribution' = data) %>% 
+  select(asset, everything(), -index)
+percentages_tibble_pre_built
+```
+
+While we have the tibbles in front of us, notice that EEM has a 25% weight but contributes 35% to the volatility. That's not necessarily a bad thing, but we should be aware of it.
+
+Our substantive work is done, but let's turn to ggplot for some visualization.
+
+```{r vusal1}
+component_percent_plot <- 
+  ggplot(percentages_tibble_pre_built, aes(asset, `risk contribution`)) +
+  geom_col(fill = 'blue', colour = 'red') + 
+  scale_y_continuous(labels = scales::percent) + 
+  ggtitle("Percent Contribution to Volatility", 
+          subtitle = "") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5)) +
+  xlab("Asset") +
+  ylab("Percent Contribution to Risk")
+
+component_percent_plot
+```
+
+
+How about a chart that compares weights to risk contribution? First we'll need to gather our tibble to long format, then call ggplot.
+
+Let's port this to a tibble for ease of presentation, and we'll append by_hand to the object because we did the calculations step-by-step.
+
+```{r byhand}
+component_percentages <- component_contribution / sd_portfolio[1, 1]
+percentage_tibble_by_hand <- 
+  tibble(symbols, w, as.vector(component_percentages)) %>% 
+  rename(asset = symbols, 'portfolio weight' = w, 'risk contribution' = `as.vector(component_percentages)`)
+
+percentage_tibble_by_hand
+
+```
+
+
+```{r v2}
+# gather
+percentage_tibble_by_hand_gather <-
+  percentage_tibble_by_hand %>% 
+  gather(type, percent, -asset)
+
+# built ggplot object
+plot_compare_weight_contribution <- 
+  ggplot(percentage_tibble_by_hand_gather, aes(x = asset, y = percent, fill = type)) +
+  geom_col(position = 'dodge') + 
+  scale_y_continuous(labels = scales::percent) + 
+  ggtitle("Percent Contribution to Volatility", 
+          subtitle = "") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5))
+
+plot_compare_weight_contribution
+```
+
+It looks like AGG, a bond fund, has done a good job as a volatility dampener. It has a 10% allocation but contributes almost zero to volatility. We're ignoring returns for now.
+
+The largest contributor to the portfolio volatility has been EEM, an emerging market ETF, but have a look at the EEM chart and note that it's own absolute volatility has been quite low.
+
+```{r EEM}
+EEM_sd <- StdDev(portfolioComponentReturns$EEM)
+
+EEM_sd_overtime <- 
+  round(rollapply(portfolioComponentReturns$EEM, 20, function(x) StdDev(x)), 4) * 100
+
+highchart(type = "stock") %>%
+  hc_title(text = "EEM Volatility") %>%
+  hc_add_series(EEM_sd_overtime, name = "EEM Vol") %>%
+  hc_yAxis(labels = list(format = "{value}%"), opposite = FALSE) %>%
+  hc_navigator(enabled = FALSE) %>% 
+  hc_scrollbar(enabled = FALSE)
+
+```
+
