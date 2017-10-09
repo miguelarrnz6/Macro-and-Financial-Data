@@ -4,6 +4,8 @@ author: "Miguel A. Arranz, Ph.D"
 output:
   html_document: default
   html_notebook: default
+  pdf_document: default
+always_allow_html: yes
 ---
 
 Packages
@@ -199,6 +201,23 @@ spy_rolling_sd <- na.omit(rollapply(spy_returns$SPY, window,
                            function(x) StdDev(x)))
 ```
 
+Rolling correlation (from FRAPO code)
+
+```{r reccorr, fig.height=12, figh.width=8}
+rollc <- function(x){ 
+dim <- ncol(x) 
+rcor <- cor(x)[lower.tri(diag(dim), diag = FALSE)] 
+return(rcor) 	
+}
+
+rcor <- rollapply(as.zoo(portfolio_component_monthly_returns_xts), width = 6, rollc, align = "right", by.column = FALSE) 	
+#"SPY" "EFA" "IJS" "EEM" "AGG"
+
+colnames(rcor) <- c("SPY & EFA", "SPY & IJS", "SPY & EEM", "SPY & AGG",
+                    "EFA & IJS", "EFA & EEM", "EFA & AGG",
+                    "IJS & EEM", "IJS & AGG", "EEM & AGG") 	
+plot(rcor, main = "", xlab = "")
+```
 
 
 We now have an xts object called spy_rolling_sd that contains the 6-month rolling standard deviation of returns of SPY. Keep in mind that the chosen window is important and can affect the results quite a bit. Soon we'll wrap this work to a Shiny app where changing the window and visualizing the results will be easier.
